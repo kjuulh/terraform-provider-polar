@@ -1,3 +1,15 @@
+## 0.2.2 (Unreleased)
+
+ENHANCEMENTS:
+
+- **resource/polar_organization:** Add `default_presentment_currency`. Polar
+  requires an organization's default presentment currency to appear among a
+  product's prices, so an organization selling a product priced only in EUR
+  has to be set to `eur` — previously unreachable from Terraform, leaving
+  `polar_product` creation failing with "The organization's default
+  presentment currency must be present in the prices." The field is optional
+  and computed, so omitting it leaves the organization's current value alone.
+
 ## 0.1.0 (Unreleased)
 
 FEATURES:

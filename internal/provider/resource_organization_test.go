@@ -163,6 +163,51 @@ func TestAccOrganizationResource_subscriptionSettings(t *testing.T) {
 
 // --- Config helpers ---
 
+func TestAccOrganizationResource_defaultPresentmentCurrency(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Polar requires the organization's default presentment currency to
+			// be present among a product's prices, so an organization selling a
+			// EUR-only product has to be switched to eur.
+			{
+				Config: testAccOrganizationPresentmentCurrency("eur"),
+				ConfigStateChecks: []statecheck.StateCheck{
+					statecheck.ExpectKnownValue(
+						"polar_organization.test",
+						tfjsonpath.New("default_presentment_currency"),
+						knownvalue.StringExact("eur"),
+					),
+				},
+			},
+			// Changing it is an in-place update, not a replacement.
+			{
+				Config: testAccOrganizationPresentmentCurrency("usd"),
+				ConfigStateChecks: []statecheck.StateCheck{
+					statecheck.ExpectKnownValue(
+						"polar_organization.test",
+						tfjsonpath.New("default_presentment_currency"),
+						knownvalue.StringExact("usd"),
+					),
+				},
+			},
+			// Omitting it leaves the organization's current value alone, and the
+			// computed attribute still reports it.
+			{
+				Config: testAccOrganizationMinimal(),
+				ConfigStateChecks: []statecheck.StateCheck{
+					statecheck.ExpectKnownValue(
+						"polar_organization.test",
+						tfjsonpath.New("default_presentment_currency"),
+						knownvalue.NotNull(),
+					),
+				},
+			},
+		},
+	})
+}
+
 func testAccOrganizationMinimal() string {
 	return `
 resource "polar_organization" "test" {
@@ -177,6 +222,14 @@ resource "polar_organization" "test" {
   website = %q
 }
 `, name, website)
+}
+
+func testAccOrganizationPresentmentCurrency(currency string) string {
+	return fmt.Sprintf(`
+resource "polar_organization" "test" {
+  default_presentment_currency = %q
+}
+`, currency)
 }
 
 func testAccOrganizationFeatureSettings(issueFunding bool) string {

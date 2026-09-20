@@ -46,6 +46,8 @@ type OrganizationResourceModel struct {
 	Website   types.String `tfsdk:"website"`
 	Socials   types.List   `tfsdk:"socials"`
 
+	DefaultPresentmentCurrency types.String `tfsdk:"default_presentment_currency"`
+
 	FeatureSettings       *FeatureSettingsModel       `tfsdk:"feature_settings"`
 	SubscriptionSettings  *SubscriptionSettingsModel  `tfsdk:"subscription_settings"`
 	NotificationSettings  *NotificationSettingsModel  `tfsdk:"notification_settings"`
@@ -132,6 +134,13 @@ func (r *OrganizationResource) Schema(ctx context.Context, req resource.SchemaRe
 			"website": schema.StringAttribute{
 				MarkdownDescription: "The organization website URL.",
 				Optional:            true,
+			},
+			"default_presentment_currency": schema.StringAttribute{
+				MarkdownDescription: "The organization's default presentment currency, for example `eur`. " +
+					"Used as the fallback in checkout and the customer portal when the customer's local currency is not available. " +
+					"Polar requires this currency to appear among a product's prices, so a product priced only in EUR needs the organization set to `eur`.",
+				Optional: true,
+				Computed: true,
 			},
 			"socials": schema.ListNestedAttribute{
 				MarkdownDescription: "List of social links for the organization.",
