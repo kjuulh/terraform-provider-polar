@@ -7,6 +7,11 @@ on:
   push:
     tags:
       - 'v*'
+  # Manual trigger against a tag ref. GitHub gates push-triggered workflows on
+  # forks until a maintainer enables them in the UI, which leaves a tag push
+  # silently producing no run at all; dispatching against the tag gives the
+  # same release without depending on that gate.
+  workflow_dispatch:
 
 # Releases need permissions to read and write the repository contents.
 # GitHub considers creating releases and uploading assets as writing contents.
