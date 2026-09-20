@@ -42,6 +42,7 @@ resource "polar_organization" "main" {
 
 - `avatar_url` (String) The organization avatar URL.
 - `customer_email_settings` (Attributes) Controls which transactional emails are sent to customers. Omit to leave customer email settings unmanaged. Only specified fields are updated; omitted fields keep their current values. (see [below for nested schema](#nestedatt--customer_email_settings))
+- `default_presentment_currency` (String) The organization's default presentment currency, for example `eur`. Used as the fallback in checkout and the customer portal when the customer's local currency is not available. Polar requires this currency to appear among a product's prices, so a product priced only in EUR needs the organization set to `eur`.
 - `email` (String) The organization contact email.
 - `feature_settings` (Attributes) Feature flags for the organization. Omit to leave feature settings unmanaged. Only specified fields are updated; omitted fields keep their current values. (see [below for nested schema](#nestedatt--feature_settings))
 - `name` (String) The name of the organization.

@@ -53,6 +53,10 @@ func buildOrganizationUpdate(ctx context.Context, data *OrganizationResourceMode
 		w := data.Website.ValueString()
 		update.Website = &w
 	}
+	if !data.DefaultPresentmentCurrency.IsNull() && !data.DefaultPresentmentCurrency.IsUnknown() {
+		c := components.PresentmentCurrency(data.DefaultPresentmentCurrency.ValueString())
+		update.DefaultPresentmentCurrency = &c
+	}
 
 	// Socials
 	if !data.Socials.IsNull() && !data.Socials.IsUnknown() {
@@ -143,6 +147,7 @@ func buildOrganizationUpdate(ctx context.Context, data *OrganizationResourceMode
 func mapOrganizationResponseToState(ctx context.Context, org *components.Organization, data *OrganizationResourceModel, diags *diag.Diagnostics) {
 	data.ID = types.StringValue(org.ID)
 	data.Slug = types.StringValue(org.Slug)
+	data.DefaultPresentmentCurrency = types.StringValue(org.DefaultPresentmentCurrency)
 
 	// Profile fields: only set if user included them in config.
 	if !data.Name.IsNull() {
