@@ -42,6 +42,7 @@ type ProductResourceModel struct {
 	ID                 types.String `tfsdk:"id"`
 	Name               types.String `tfsdk:"name"`
 	Description        types.String `tfsdk:"description"`
+	Visibility         types.String `tfsdk:"visibility"`
 	RecurringInterval  types.String `tfsdk:"recurring_interval"`
 	TrialInterval      types.String `tfsdk:"trial_interval"`
 	TrialIntervalCount types.Int64  `tfsdk:"trial_interval_count"`
@@ -107,6 +108,14 @@ func (r *ProductResource) Schema(ctx context.Context, req resource.SchemaRequest
 			"description": schema.StringAttribute{
 				MarkdownDescription: "The description of the product.",
 				Optional:            true,
+			},
+			"visibility": schema.StringAttribute{
+				MarkdownDescription: "Product visibility: `draft` is unpublished, `private` is hidden from the storefront but available through direct checkout, and `public` is listed. Changes update the existing product.",
+				Optional:            true,
+				Computed:            true,
+				Validators: []validator.String{
+					stringvalidator.OneOf("draft", "private", "public"),
+				},
 			},
 			"recurring_interval": schema.StringAttribute{
 				MarkdownDescription: "The billing interval for recurring products. Must be one of: `month`, `year`, `week`, `day`. Omit for one-time products. Changing this forces a new resource (the existing product is archived, not deleted).",

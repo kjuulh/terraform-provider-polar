@@ -27,6 +27,12 @@ func buildProductCreateRequest(ctx context.Context, data *ProductResourceModel) 
 		description = &d
 	}
 
+	var visibility *components.ProductVisibility
+	if !data.Visibility.IsNull() && !data.Visibility.IsUnknown() {
+		v := components.ProductVisibility(data.Visibility.ValueString())
+		visibility = &v
+	}
+
 	var medias []string
 	if !data.Medias.IsNull() && !data.Medias.IsUnknown() {
 		d := data.Medias.ElementsAs(ctx, &medias, false)
@@ -48,6 +54,7 @@ func buildProductCreateRequest(ctx context.Context, data *ProductResourceModel) 
 			Name:              name,
 			Description:       description,
 			Prices:            prices,
+			Visibility:        visibility,
 			RecurringInterval: components.SubscriptionRecurringInterval(data.RecurringInterval.ValueString()),
 			Medias:            medias,
 		}
@@ -83,6 +90,7 @@ func buildProductCreateRequest(ctx context.Context, data *ProductResourceModel) 
 
 	oneTime := components.ProductCreateOneTime{
 		Name:        name,
+		Visibility:  visibility,
 		Description: description,
 		Prices:      prices,
 		Medias:      medias,
@@ -116,6 +124,10 @@ func buildProductUpdateRequest(ctx context.Context, data *ProductResourceModel, 
 	if !data.Description.IsNull() && !data.Description.IsUnknown() {
 		d := data.Description.ValueString()
 		update.Description = &d
+	}
+	if !data.Visibility.IsNull() && !data.Visibility.IsUnknown() {
+		v := components.ProductVisibility(data.Visibility.ValueString())
+		update.Visibility = &v
 	}
 
 	prices, d := pricesToUpdateSDK(data.Prices, currentPrices)
@@ -166,6 +178,7 @@ func mapProductResponseToState(ctx context.Context, product *components.Product,
 	data.ID = types.StringValue(product.ID)
 	data.Name = types.StringValue(product.Name)
 	data.IsArchived = types.BoolValue(product.IsArchived)
+	data.Visibility = types.StringValue(string(product.Visibility))
 	data.Description = optionalStringValue(product.Description)
 
 	if product.RecurringInterval != nil {

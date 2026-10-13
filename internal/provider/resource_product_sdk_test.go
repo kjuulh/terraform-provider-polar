@@ -3,6 +3,10 @@
 package provider
 
 import (
+	"context"
+
+	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/polarsource/polar-go/models/components"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -168,5 +172,39 @@ func TestPreserveUnitAmountFormatting_reorder(t *testing.T) {
 	}
 	if got := prices[1].UnitAmount.ValueString(); got != "0.50" {
 		t.Errorf("second price (m1): got %q, want %q", got, "0.50")
+	}
+}
+
+func TestProductVisibilityRoundTrip(t *testing.T) {
+	for _, visibility := range []string{"public", "private", "draft"} {
+		t.Run(visibility, func(t *testing.T) {
+			model := ProductResourceModel{
+				Name:              types.StringValue("Subscription"),
+				RecurringInterval: types.StringValue("month"),
+				Visibility:        types.StringValue(visibility),
+			}
+			created, createDiags := buildProductCreateRequest(context.Background(), &model)
+			if createDiags.HasError() {
+				t.Fatal(createDiags)
+			}
+			if got := created.ProductCreateRecurring.Visibility; got == nil || string(*got) != visibility {
+				t.Fatalf("create visibility = %v, want %s", got, visibility)
+			}
+
+			updated, updateDiags := buildProductUpdateRequest(context.Background(), &model, nil)
+			if updateDiags.HasError() {
+				t.Fatal(updateDiags)
+			}
+			if got := updated.Visibility; got == nil || string(*got) != visibility {
+				t.Fatalf("update visibility = %v, want %s", got, visibility)
+			}
+
+			response := &components.Product{ID: "product-id", Name: "Subscription", Visibility: components.ProductVisibility(visibility)}
+			var readDiags diag.Diagnostics
+			mapProductResponseToState(context.Background(), response, &model, &readDiags)
+			if readDiags.HasError() || model.Visibility.ValueString() != visibility {
+				t.Fatalf("read visibility = %s, diagnostics = %v", model.Visibility.ValueString(), readDiags)
+			}
+		})
 	}
 }
