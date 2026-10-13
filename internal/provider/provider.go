@@ -5,8 +5,10 @@ package provider
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
@@ -35,7 +37,8 @@ type PolarProviderModel struct {
 
 // PolarProviderData is passed to every resource/datasource via Configure().
 type PolarProviderData struct {
-	Client *polargo.Polar
+	Client   *polargo.Polar
+	Webhooks *webhookEndpointHTTP
 
 	// Singleton guard: only one polar_organization resource per provider.
 	orgOnce sync.Once
@@ -157,6 +160,11 @@ func (p *PolarProvider) Configure(ctx context.Context, req provider.ConfigureReq
 	// Resources receive this via resp.ResourceData, datasources via resp.DataSourceData.
 	providerData := &PolarProviderData{
 		Client: client,
+		Webhooks: &webhookEndpointHTTP{
+			baseURL: polargo.ServerList[server],
+			token:   accessToken,
+			client:  &http.Client{Timeout: 60 * time.Second},
+		},
 	}
 	resp.DataSourceData = providerData
 	resp.ResourceData = providerData

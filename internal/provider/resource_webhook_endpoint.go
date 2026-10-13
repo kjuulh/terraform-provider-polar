@@ -32,7 +32,8 @@ func NewWebhookEndpointResource() resource.Resource {
 }
 
 type WebhookEndpointResource struct {
-	client *polargo.Polar // set in Configure()
+	client   *polargo.Polar // used for delete
+	webhooks *webhookEndpointHTTP
 }
 
 // WebhookEndpointResourceModel is the Terraform state shape for polar_webhook_endpoint.
@@ -104,6 +105,7 @@ func (r *WebhookEndpointResource) Schema(ctx context.Context, req resource.Schem
 func (r *WebhookEndpointResource) Configure(ctx context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	if pd := extractProviderData(req.ProviderData, &resp.Diagnostics); pd != nil {
 		r.client = pd.Client
+		r.webhooks = pd.Webhooks
 	}
 }
 
@@ -132,7 +134,7 @@ func (r *WebhookEndpointResource) Create(ctx context.Context, req resource.Creat
 		Events: events,
 	}
 
-	result, err := r.client.Webhooks.CreateWebhookEndpoint(ctx, createReq)
+	endpoint, err := r.webhooks.create(ctx, createReq)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error creating webhook endpoint",
@@ -142,16 +144,14 @@ func (r *WebhookEndpointResource) Create(ctx context.Context, req resource.Creat
 	}
 
 	tflog.Trace(ctx, "created webhook endpoint", map[string]interface{}{
-		"id": result.WebhookEndpoint.ID,
+		"id": endpoint.ID,
 	})
-
-	endpoint := result.WebhookEndpoint
 
 	// The Create API always creates endpoints as enabled.
 	// If the user requested enabled = false, do a follow-up update.
 	if !data.Enabled.IsNull() && !data.Enabled.ValueBool() {
 		enabled := false
-		updateResult, err := r.client.Webhooks.UpdateWebhookEndpoint(ctx, endpoint.ID, components.WebhookEndpointUpdate{
+		endpoint, err = r.webhooks.update(ctx, endpoint.ID, components.WebhookEndpointUpdate{
 			Enabled: &enabled,
 		})
 		if err != nil {
@@ -161,7 +161,6 @@ func (r *WebhookEndpointResource) Create(ctx context.Context, req resource.Creat
 			)
 			return
 		}
-		endpoint = updateResult.WebhookEndpoint
 	}
 
 	// Polar's API is eventually consistent — a successful write may not be
@@ -170,11 +169,7 @@ func (r *WebhookEndpointResource) Create(ctx context.Context, req resource.Creat
 	// catches up, confirming the write has propagated across replicas.
 	writeTime := latestTimestamp(endpoint)
 	webhook, err := pollForConsistency(ctx, "webhook endpoint", endpoint.ID, writeTime, func() (*components.WebhookEndpoint, error) {
-		result, err := r.client.Webhooks.GetWebhookEndpoint(ctx, endpoint.ID)
-		if err != nil {
-			return nil, err
-		}
-		return result.WebhookEndpoint, nil
+		return r.webhooks.get(ctx, endpoint.ID)
 	}, &resp.Diagnostics)
 	if err != nil {
 		resp.Diagnostics.AddError(
@@ -198,7 +193,7 @@ func (r *WebhookEndpointResource) Read(ctx context.Context, req resource.ReadReq
 		return
 	}
 
-	result, err := r.client.Webhooks.GetWebhookEndpoint(ctx, data.ID.ValueString())
+	result, err := r.webhooks.get(ctx, data.ID.ValueString())
 	if err != nil {
 		if handleNotFoundRemove(ctx, err, "webhook endpoint", data.ID.ValueString(), &resp.State) {
 			return
@@ -210,7 +205,7 @@ func (r *WebhookEndpointResource) Read(ctx context.Context, req resource.ReadReq
 		return
 	}
 
-	r.mapResponseToState(ctx, result.WebhookEndpoint, &data, &resp.Diagnostics)
+	r.mapResponseToState(ctx, result, &data, &resp.Diagnostics)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
@@ -244,7 +239,7 @@ func (r *WebhookEndpointResource) Update(ctx context.Context, req resource.Updat
 		Enabled: &enabled,
 	}
 
-	updateResult, err := r.client.Webhooks.UpdateWebhookEndpoint(ctx, data.ID.ValueString(), updateReq)
+	endpoint, err := r.webhooks.update(ctx, data.ID.ValueString(), updateReq)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error updating webhook endpoint",
@@ -255,13 +250,9 @@ func (r *WebhookEndpointResource) Update(ctx context.Context, req resource.Updat
 
 	// Eventual consistency poll (same pattern as Create).
 	webhookID := data.ID.ValueString()
-	writeTime := latestTimestamp(updateResult.WebhookEndpoint)
+	writeTime := latestTimestamp(endpoint)
 	webhook, err := pollForConsistency(ctx, "webhook endpoint", webhookID, writeTime, func() (*components.WebhookEndpoint, error) {
-		result, err := r.client.Webhooks.GetWebhookEndpoint(ctx, webhookID)
-		if err != nil {
-			return nil, err
-		}
-		return result.WebhookEndpoint, nil
+		return r.webhooks.get(ctx, webhookID)
 	}, &resp.Diagnostics)
 	if err != nil {
 		resp.Diagnostics.AddError(

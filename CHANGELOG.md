@@ -1,3 +1,11 @@
+## 0.2.3 (2026-10-13)
+
+BUG FIXES:
+
+- **resource/polar_webhook_endpoint:** Import and refresh preserve webhook
+  events not yet listed in polar-go, including `subscription.cycled`. Updates
+  retain these event names instead of failing to decode the API response.
+
 ## 0.2.2 (2026-09-20)
 
 ENHANCEMENTS:
