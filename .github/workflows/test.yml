@@ -15,9 +15,12 @@ on:
 permissions:
   contents: read
 
-# Offline acceptance tests use fake Polar HTTP servers and never need credentials.
+# Serialize all acceptance tests against the sandbox org. The Polar sandbox
+# is a shared resource — parallel test suites create/delete the same resource
+# types and interfere with each other. Rate limits also mean parallelism
+# doesn't improve throughput. Queued runs wait instead of being cancelled.
 concurrency:
-  group: polar-provider-tests-${{ github.ref }}
+  group: polar-sandbox-tests
   cancel-in-progress: false
 
 jobs:
@@ -57,9 +60,9 @@ jobs:
           git diff --compact-summary --exit-code || \
             (echo; echo "Unexpected difference in directories after code generation. Run 'make generate' command and commit."; exit 1)
 
-  # Run offline acceptance tests against supported Terraform CLI versions.
-  test:
-    name: 'Acceptance Tests: Terraform ${{ matrix.terraform }}'
+  # Offline acceptance scenarios always run and never need Polar credentials.
+  offline:
+    name: 'Offline Tests: Terraform ${{ matrix.terraform }}'
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -87,5 +90,45 @@ jobs:
           POLAR_ACCESS_TOKEN: ""
           POLAR_SERVER: ""
           TF_ACC: ""
+        run: go test -v -cover ./internal/provider/
+        timeout-minutes: 10
+
+  # Run acceptance tests in a matrix with Terraform CLI versions.
+  # Skipped when secrets are unavailable (e.g. Dependabot PRs).
+  test:
+    name: 'Acceptance Tests: Terraform ${{ matrix.terraform }}'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      POLAR_ACCESS_TOKEN: ${{ secrets.POLAR_ACCESS_TOKEN }}
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        # Terraform versions
+        terraform:
+          - '1.13.*'
+          - '1.14.*'
+    steps:
+      - if: env.POLAR_ACCESS_TOKEN == ''
+        run: echo "::notice::Skipping acceptance tests — POLAR_ACCESS_TOKEN not available (e.g. Dependabot PR)" && exit 0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.POLAR_ACCESS_TOKEN != ''
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: env.POLAR_ACCESS_TOKEN != ''
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        if: env.POLAR_ACCESS_TOKEN != ''
+        with:
+          terraform_version: ${{ matrix.terraform }}
+          terraform_wrapper: false
+      - if: env.POLAR_ACCESS_TOKEN != ''
+        run: go mod download
+      - if: env.POLAR_ACCESS_TOKEN != ''
+        env:
+          TF_ACC: "1"
         run: go test -v -cover ./internal/provider/
         timeout-minutes: 10

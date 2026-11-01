@@ -19,8 +19,9 @@ VERIFICATION:
 - Offline Terraform acceptance scenarios adopt existing products and nested
   prices, meters, discounts, and webhook endpoints through fake HTTP servers,
   including typed metadata, caps, explicit tax behavior, and future webhook events.
-- CI runs offline acceptance scenarios without Polar credentials. Real-account
-  acceptance tests remain opt-in through `TF_ACC=1`; no live compatibility or
+- CI adds an offline acceptance job without Polar credentials, alongside the
+  unchanged secret-gated sandbox acceptance job. The sandbox suite remains
+  serialized and runs when its secret is available. No live compatibility or
   catalog migration is claimed by the fake-server suite.
 
 ## 0.2.3 (2026-10-13)
