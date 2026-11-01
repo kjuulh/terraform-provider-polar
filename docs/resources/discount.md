@@ -29,6 +29,7 @@ Manages a Polar discount. Discounts can be applied to products at checkout to re
 - `duration_in_months` (Number) Number of months the discount applies. Required when `duration` is `repeating`. For yearly pricing, multiply by 12.
 - `ends_at` (String) RFC 3339 timestamp after which the discount is no longer redeemable.
 - `max_redemptions` (Number) Maximum number of times the discount can be redeemed.
+- `max_redemptions_per_customer` (Number) Maximum number of times each customer can redeem the discount.
 - `metadata` (Map of String) Key-value metadata.
 - `products` (List of String) List of product IDs this discount can be applied to. If empty, the discount applies to all products.
 - `starts_at` (String) RFC 3339 timestamp after which the discount is redeemable.

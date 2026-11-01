@@ -15,7 +15,10 @@ import (
 // Timestamped interface. The Polar SDK models discounts as a union of 4 distinct
 // types keyed by type+duration, so we need this adapter to delegate to the
 // active variant.
-type timestampedDiscount struct{ *components.Discount }
+type timestampedDiscount struct {
+	*components.Discount
+	MaxRedemptionsPerCustomer *int64
+}
 
 func (d *timestampedDiscount) GetCreatedAt() time.Time {
 	switch {
@@ -277,7 +280,8 @@ func buildDiscountUpdateRequest(ctx context.Context, data *DiscountResourceModel
 
 // --- Map SDK response to Terraform state ---
 
-func mapDiscountResponseToState(ctx context.Context, discount *components.Discount, data *DiscountResourceModel, diags *diag.Diagnostics) {
+func mapDiscountResponseToState(ctx context.Context, discount *timestampedDiscount, data *DiscountResourceModel, diags *diag.Diagnostics) {
+	data.MaxRedemptionsPerCustomer = optionalInt64Value(discount.MaxRedemptionsPerCustomer)
 	switch {
 	case discount.DiscountFixedOnceForeverDuration != nil:
 		d := discount.DiscountFixedOnceForeverDuration
@@ -336,7 +340,7 @@ func mapDiscountResponseToState(ctx context.Context, discount *components.Discou
 	}
 
 	// Map products (extract IDs from the response's DiscountProduct objects).
-	productIDs := extractProductIDsFromDiscount(discount)
+	productIDs := extractProductIDsFromDiscount(discount.Discount)
 	if len(productIDs) > 0 {
 		productList, d := types.ListValueFrom(ctx, types.StringType, productIDs)
 		diags.Append(d...)

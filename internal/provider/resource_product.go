@@ -6,11 +6,13 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
@@ -39,18 +41,20 @@ type ProductResource struct {
 // Products have polymorphic prices (fixed/free/custom/metered_unit) and can
 // be either one-time or recurring (determined by recurring_interval).
 type ProductResourceModel struct {
-	ID                 types.String `tfsdk:"id"`
-	Name               types.String `tfsdk:"name"`
-	Description        types.String `tfsdk:"description"`
-	Visibility         types.String `tfsdk:"visibility"`
-	RecurringInterval  types.String `tfsdk:"recurring_interval"`
-	TrialInterval      types.String `tfsdk:"trial_interval"`
-	TrialIntervalCount types.Int64  `tfsdk:"trial_interval_count"`
-	Prices             []PriceModel `tfsdk:"prices"`
-	BenefitIDs         types.Set    `tfsdk:"benefit_ids"`
-	Metadata           types.Map    `tfsdk:"metadata"`
-	Medias             types.List   `tfsdk:"medias"`
-	IsArchived         types.Bool   `tfsdk:"is_archived"`
+	ID                     types.String         `tfsdk:"id"`
+	Name                   types.String         `tfsdk:"name"`
+	Description            types.String         `tfsdk:"description"`
+	Visibility             types.String         `tfsdk:"visibility"`
+	RecurringInterval      types.String         `tfsdk:"recurring_interval"`
+	RecurringIntervalCount types.Int64          `tfsdk:"recurring_interval_count"`
+	TrialInterval          types.String         `tfsdk:"trial_interval"`
+	TrialIntervalCount     types.Int64          `tfsdk:"trial_interval_count"`
+	Prices                 []PriceModel         `tfsdk:"prices"`
+	BenefitIDs             types.Set            `tfsdk:"benefit_ids"`
+	Metadata               types.Map            `tfsdk:"metadata"`
+	MetadataJSON           jsontypes.Normalized `tfsdk:"metadata_json"`
+	Medias                 types.List           `tfsdk:"medias"`
+	IsArchived             types.Bool           `tfsdk:"is_archived"`
 }
 
 // PriceModel is a flat struct that covers all price types. The `amount_type`
@@ -63,6 +67,7 @@ type ProductResourceModel struct {
 type PriceModel struct {
 	AmountType    types.String `tfsdk:"amount_type"`
 	PriceCurrency types.String `tfsdk:"price_currency"`
+	TaxBehavior   types.String `tfsdk:"tax_behavior"`
 	// Fixed
 	PriceAmount types.Int64 `tfsdk:"price_amount"`
 	// Custom (pay-what-you-want)
@@ -129,6 +134,12 @@ func (r *ProductResource) Schema(ctx context.Context, req resource.SchemaRequest
 					stringvalidator.OneOf("month", "year", "week", "day"),
 				},
 			},
+			"recurring_interval_count": schema.Int64Attribute{
+				MarkdownDescription: "Number of billing intervals between charges. Omit to preserve the API default. Changing this replaces the product.",
+				Optional:            true,
+				Computed:            true,
+				PlanModifiers:       []planmodifier.Int64{int64planmodifier.RequiresReplace()},
+			},
 			"trial_interval": schema.StringAttribute{
 				MarkdownDescription: "The interval unit for the trial period. Must be `day`, `week`, `month`, or `year`. Only applicable to recurring products.",
 				Optional:            true,
@@ -159,6 +170,12 @@ func (r *ProductResource) Schema(ctx context.Context, req resource.SchemaRequest
 							PlanModifiers: []planmodifier.String{
 								stringplanmodifier.UseStateForUnknown(),
 							},
+						},
+						"tax_behavior": schema.StringAttribute{
+							MarkdownDescription: "Tax behavior: `exclusive` or `inclusive`. Omit to preserve the existing price behavior.",
+							Optional:            true,
+							Computed:            true,
+							Validators:          []validator.String{stringvalidator.OneOf("exclusive", "inclusive")},
 						},
 						// Fixed
 						"price_amount": schema.Int64Attribute{
@@ -221,6 +238,11 @@ func (r *ProductResource) Schema(ctx context.Context, req resource.SchemaRequest
 				Computed:            true,
 				ElementType:         types.StringType,
 			},
+			"metadata_json": schema.StringAttribute{
+				MarkdownDescription: "Metadata as a JSON object with string, integer, number, or boolean values. Mutually exclusive with `metadata`. Integer values retain int64 precision. Import uses this representation.",
+				Optional:            true,
+				CustomType:          jsontypes.NormalizedType{},
+			},
 			"medias": schema.ListAttribute{
 				MarkdownDescription: "List of media file IDs attached to the product.",
 				Optional:            true,
@@ -250,6 +272,10 @@ func (r *ProductResource) ValidateConfig(ctx context.Context, req resource.Valid
 	}
 
 	validateMetadata(ctx, data.Metadata, &resp.Diagnostics)
+	validateProductMetadataJSON(data.MetadataJSON, &resp.Diagnostics)
+	if !data.MetadataJSON.IsNull() && !data.Metadata.IsNull() && !data.Metadata.IsUnknown() {
+		resp.Diagnostics.AddError("Conflicting metadata representations", "Configure only one of metadata_json or metadata.")
+	}
 
 	// Trial fields must be set together or not at all.
 	trialIntervalSet := !data.TrialInterval.IsNull() && !data.TrialInterval.IsUnknown()
@@ -678,4 +704,5 @@ func (r *ProductResource) Delete(ctx context.Context, req resource.DeleteRequest
 
 func (r *ProductResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("metadata_json"), "{}")...)
 }

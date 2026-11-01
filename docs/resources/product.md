@@ -64,15 +64,24 @@ resource "polar_product" "donation" {
 
 # Usage-based subscription with metered pricing
 resource "polar_product" "api_access" {
-  name               = "API Access"
-  description        = "Pay per API call."
-  recurring_interval = "month"
+  name                     = "API Access"
+  description              = "Pay per API call."
+  recurring_interval       = "month"
+  recurring_interval_count = 1
+  visibility               = "private"
+
+  metadata_json = jsonencode({
+    tier             = "usage"
+    monthly_cap      = 50000
+    included_enabled = true
+  })
 
   prices = [{
-    amount_type = "metered_unit"
-    meter_id    = polar_meter.api_calls.id
-    unit_amount = "0.01"
-    cap_amount  = 50000
+    amount_type  = "metered_unit"
+    meter_id     = polar_meter.api_calls.id
+    unit_amount  = "0.01"
+    cap_amount   = 50000
+    tax_behavior = "exclusive"
   }]
 }
 
@@ -109,9 +118,12 @@ resource "polar_product" "pro_with_benefits" {
 - `is_archived` (Boolean) Whether the product is archived. Defaults to `false`. Set to `true` to archive a product while keeping it in Terraform state.
 - `medias` (List of String) List of media file IDs attached to the product.
 - `metadata` (Map of String) Key-value metadata.
+- `metadata_json` (String) Metadata as a JSON object with string, integer, number, or boolean values. Mutually exclusive with `metadata`. Integer values retain int64 precision. Import uses this representation.
 - `recurring_interval` (String) The billing interval for recurring products. Must be one of: `month`, `year`, `week`, `day`. Omit for one-time products. Changing this forces a new resource (the existing product is archived, not deleted).
+- `recurring_interval_count` (Number) Number of billing intervals between charges. Omit to preserve the API default. Changing this replaces the product.
 - `trial_interval` (String) The interval unit for the trial period. Must be `day`, `week`, `month`, or `year`. Only applicable to recurring products.
 - `trial_interval_count` (Number) The number of interval units for the trial period. Only applicable to recurring products.
+- `visibility` (String) Product visibility: `draft` is unpublished, `private` is hidden from the storefront but available through direct checkout, and `public` is listed. Changes update the existing product.
 
 ### Read-Only
 
@@ -134,6 +146,7 @@ Optional:
 - `price_amount` (Number) The price amount in cents. Required when `amount_type` is `fixed`.
 - `price_currency` (String) The currency code (e.g. `usd`). Defaults to `usd`. Applies to `fixed`, `custom`, and `metered_unit` types.
 - `seat_tiers` (Attributes List) List of seat-based pricing tiers. Required when `amount_type` is `seat_based`. Tiers must be ordered by `min_seats` ascending with no gaps, and only the last tier may omit `max_seats`. (see [below for nested schema](#nestedatt--prices--seat_tiers))
+- `tax_behavior` (String) Tax behavior: `exclusive` or `inclusive`. Omit to preserve the existing price behavior.
 - `unit_amount` (String) The price per unit in cents (supports up to 12 decimal places). Required when `amount_type` is `metered_unit`.
 
 <a id="nestedatt--prices--seat_tiers"></a>

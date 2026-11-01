@@ -29,26 +29,28 @@ func NewDiscountResource() resource.Resource {
 }
 
 type DiscountResource struct {
-	client *polargo.Polar
+	client    *polargo.Polar
+	discounts *discountHTTP
 }
 
 // DiscountResourceModel is the Terraform state shape for polar_discount.
 // The SDK uses 4 distinct create variants keyed by type+duration, but we use
 // a flat schema with conditional validation.
 type DiscountResourceModel struct {
-	ID               types.String `tfsdk:"id"`
-	Name             types.String `tfsdk:"name"`
-	Type             types.String `tfsdk:"type"`
-	Duration         types.String `tfsdk:"duration"`
-	Amounts          types.Map    `tfsdk:"amounts"`
-	BasisPoints      types.Int64  `tfsdk:"basis_points"`
-	DurationInMonths types.Int64  `tfsdk:"duration_in_months"`
-	Code             types.String `tfsdk:"code"`
-	StartsAt         types.String `tfsdk:"starts_at"`
-	EndsAt           types.String `tfsdk:"ends_at"`
-	MaxRedemptions   types.Int64  `tfsdk:"max_redemptions"`
-	Products         types.List   `tfsdk:"products"`
-	Metadata         types.Map    `tfsdk:"metadata"`
+	ID                        types.String `tfsdk:"id"`
+	Name                      types.String `tfsdk:"name"`
+	Type                      types.String `tfsdk:"type"`
+	Duration                  types.String `tfsdk:"duration"`
+	Amounts                   types.Map    `tfsdk:"amounts"`
+	BasisPoints               types.Int64  `tfsdk:"basis_points"`
+	DurationInMonths          types.Int64  `tfsdk:"duration_in_months"`
+	Code                      types.String `tfsdk:"code"`
+	StartsAt                  types.String `tfsdk:"starts_at"`
+	EndsAt                    types.String `tfsdk:"ends_at"`
+	MaxRedemptions            types.Int64  `tfsdk:"max_redemptions"`
+	MaxRedemptionsPerCustomer types.Int64  `tfsdk:"max_redemptions_per_customer"`
+	Products                  types.List   `tfsdk:"products"`
+	Metadata                  types.Map    `tfsdk:"metadata"`
 }
 
 func (r *DiscountResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -120,6 +122,10 @@ func (r *DiscountResource) Schema(ctx context.Context, req resource.SchemaReques
 				MarkdownDescription: "Maximum number of times the discount can be redeemed.",
 				Optional:            true,
 			},
+			"max_redemptions_per_customer": schema.Int64Attribute{
+				MarkdownDescription: "Maximum number of times each customer can redeem the discount.",
+				Optional:            true,
+			},
 			"products": schema.ListAttribute{
 				MarkdownDescription: "List of product IDs this discount can be applied to. If empty, the discount applies to all products.",
 				Optional:            true,
@@ -138,6 +144,11 @@ func (r *DiscountResource) Schema(ctx context.Context, req resource.SchemaReques
 func (r *DiscountResource) Configure(ctx context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	if pd := extractProviderData(req.ProviderData, &resp.Diagnostics); pd != nil {
 		r.client = pd.Client
+		r.discounts = &discountHTTP{
+			baseURL: pd.Webhooks.baseURL,
+			token:   pd.Webhooks.token,
+			client:  pd.Webhooks.client,
+		}
 	}
 }
 
@@ -196,7 +207,7 @@ func (r *DiscountResource) Create(ctx context.Context, req resource.CreateReques
 		return
 	}
 
-	result, err := r.client.Discounts.Create(ctx, *createReq)
+	result, err := r.discounts.create(ctx, *createReq, data.MaxRedemptionsPerCustomer)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error creating discount",
@@ -211,13 +222,9 @@ func (r *DiscountResource) Create(ctx context.Context, req resource.CreateReques
 	})
 
 	id := discountID(result.Discount)
-	writeTime := latestTimestamp(&timestampedDiscount{result.Discount})
+	writeTime := latestTimestamp(result)
 	wrappedDiscount, err := pollForConsistency(ctx, "discount", id, writeTime, func() (*timestampedDiscount, error) {
-		result, err := r.client.Discounts.Get(ctx, id)
-		if err != nil {
-			return nil, err
-		}
-		return &timestampedDiscount{result.Discount}, nil
+		return r.discounts.get(ctx, id)
 	}, &resp.Diagnostics)
 	if err != nil {
 		resp.Diagnostics.AddError(
@@ -227,7 +234,7 @@ func (r *DiscountResource) Create(ctx context.Context, req resource.CreateReques
 		return
 	}
 
-	mapDiscountResponseToState(ctx, wrappedDiscount.Discount, &data, &resp.Diagnostics)
+	mapDiscountResponseToState(ctx, wrappedDiscount, &data, &resp.Diagnostics)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
@@ -238,7 +245,7 @@ func (r *DiscountResource) Read(ctx context.Context, req resource.ReadRequest, r
 		return
 	}
 
-	result, err := r.client.Discounts.Get(ctx, data.ID.ValueString())
+	result, err := r.discounts.get(ctx, data.ID.ValueString())
 	if err != nil {
 		if handleNotFoundRemove(ctx, err, "discount", data.ID.ValueString(), &resp.State) {
 			return
@@ -250,7 +257,7 @@ func (r *DiscountResource) Read(ctx context.Context, req resource.ReadRequest, r
 		return
 	}
 
-	mapDiscountResponseToState(ctx, result.Discount, &data, &resp.Diagnostics)
+	mapDiscountResponseToState(ctx, result, &data, &resp.Diagnostics)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
@@ -267,7 +274,7 @@ func (r *DiscountResource) Update(ctx context.Context, req resource.UpdateReques
 		return
 	}
 
-	result, err := r.client.Discounts.Update(ctx, data.ID.ValueString(), *updateReq)
+	result, err := r.discounts.update(ctx, data.ID.ValueString(), *updateReq, data.MaxRedemptionsPerCustomer)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error updating discount",
@@ -277,13 +284,9 @@ func (r *DiscountResource) Update(ctx context.Context, req resource.UpdateReques
 	}
 
 	discountID := data.ID.ValueString()
-	writeTime := latestTimestamp(&timestampedDiscount{result.Discount})
+	writeTime := latestTimestamp(result)
 	wrappedDiscount, err := pollForConsistency(ctx, "discount", discountID, writeTime, func() (*timestampedDiscount, error) {
-		result, err := r.client.Discounts.Get(ctx, discountID)
-		if err != nil {
-			return nil, err
-		}
-		return &timestampedDiscount{result.Discount}, nil
+		return r.discounts.get(ctx, discountID)
 	}, &resp.Diagnostics)
 	if err != nil {
 		resp.Diagnostics.AddError(
@@ -293,7 +296,7 @@ func (r *DiscountResource) Update(ctx context.Context, req resource.UpdateReques
 		return
 	}
 
-	mapDiscountResponseToState(ctx, wrappedDiscount.Discount, &data, &resp.Diagnostics)
+	mapDiscountResponseToState(ctx, wrappedDiscount, &data, &resp.Diagnostics)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
