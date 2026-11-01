@@ -49,15 +49,24 @@ resource "polar_product" "donation" {
 
 # Usage-based subscription with metered pricing
 resource "polar_product" "api_access" {
-  name               = "API Access"
-  description        = "Pay per API call."
-  recurring_interval = "month"
+  name                     = "API Access"
+  description              = "Pay per API call."
+  recurring_interval       = "month"
+  recurring_interval_count = 1
+  visibility               = "private"
+
+  metadata_json = jsonencode({
+    tier             = "usage"
+    monthly_cap      = 50000
+    included_enabled = true
+  })
 
   prices = [{
-    amount_type = "metered_unit"
-    meter_id    = polar_meter.api_calls.id
-    unit_amount = "0.01"
-    cap_amount  = 50000
+    amount_type  = "metered_unit"
+    meter_id     = polar_meter.api_calls.id
+    unit_amount  = "0.01"
+    cap_amount   = 50000
+    tax_behavior = "exclusive"
   }]
 }
 

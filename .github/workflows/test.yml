@@ -60,6 +60,39 @@ jobs:
           git diff --compact-summary --exit-code || \
             (echo; echo "Unexpected difference in directories after code generation. Run 'make generate' command and commit."; exit 1)
 
+  # Offline acceptance scenarios always run and never need Polar credentials.
+  offline:
+    name: 'Offline Tests: Terraform ${{ matrix.terraform }}'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        # Terraform versions
+        terraform:
+          - '1.13.*'
+          - '1.14.*'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ matrix.terraform }}
+          terraform_wrapper: false
+      - run: go mod download
+      - name: Run offline unit and acceptance tests
+        env:
+          POLAR_ACCESS_TOKEN: ""
+          POLAR_SERVER: ""
+          TF_ACC: ""
+        run: go test -v -cover ./internal/provider/
+        timeout-minutes: 10
+
   # Run acceptance tests in a matrix with Terraform CLI versions.
   # Skipped when secrets are unavailable (e.g. Dependabot PRs).
   test:

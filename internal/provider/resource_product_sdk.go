@@ -76,6 +76,13 @@ func buildProductCreateRequest(ctx context.Context, data *ProductResourceModel) 
 			}
 			recurring.Metadata = m
 		}
+		if !data.MetadataJSON.IsNull() && !data.MetadataJSON.IsUnknown() {
+			recurring.Metadata = productMetadataFromJSON[components.ProductCreateRecurringMetadata](data.MetadataJSON, &diags)
+		}
+		if !data.RecurringIntervalCount.IsNull() && !data.RecurringIntervalCount.IsUnknown() {
+			count := data.RecurringIntervalCount.ValueInt64()
+			recurring.RecurringIntervalCount = &count
+		}
 
 		result := components.CreateProductCreateProductCreateRecurring(recurring)
 		return &result, diags
@@ -103,6 +110,9 @@ func buildProductCreateRequest(ctx context.Context, data *ProductResourceModel) 
 			return nil, diags
 		}
 		oneTime.Metadata = m
+	}
+	if !data.MetadataJSON.IsNull() && !data.MetadataJSON.IsUnknown() {
+		oneTime.Metadata = productMetadataFromJSON[components.ProductCreateOneTimeMetadata](data.MetadataJSON, &diags)
 	}
 
 	result := components.CreateProductCreateProductCreateOneTime(oneTime)
@@ -145,6 +155,9 @@ func buildProductUpdateRequest(ctx context.Context, data *ProductResourceModel, 
 		}
 		update.Metadata = m
 	}
+	if !data.MetadataJSON.IsNull() && !data.MetadataJSON.IsUnknown() {
+		update.Metadata = productMetadataFromJSON[components.ProductUpdateMetadata](data.MetadataJSON, &diags)
+	}
 
 	if !data.Medias.IsNull() && !data.Medias.IsUnknown() {
 		var medias []string
@@ -179,6 +192,7 @@ func mapProductResponseToState(ctx context.Context, product *components.Product,
 	data.Name = types.StringValue(product.Name)
 	data.IsArchived = types.BoolValue(product.IsArchived)
 	data.Visibility = types.StringValue(string(product.Visibility))
+	data.RecurringIntervalCount = optionalInt64Value(product.RecurringIntervalCount)
 	data.Description = optionalStringValue(product.Description)
 
 	if product.RecurringInterval != nil {
@@ -201,6 +215,9 @@ func mapProductResponseToState(ctx context.Context, product *components.Product,
 	data.Metadata = sdkMetadataToMap(ctx, product.Metadata, func(v components.MetadataOutputType) metadataFields {
 		return metadataFields{Str: v.Str, Integer: v.Integer, Number: v.Number, Boolean: v.Boolean}
 	}, diags)
+	if !data.MetadataJSON.IsNull() {
+		data.MetadataJSON = productMetadataJSON(product.Metadata, data.MetadataJSON, diags)
+	}
 
 	// Map benefit_ids — only if the user opted into TF-managed benefits (non-null).
 	// If benefit_ids was omitted from config, we leave it null so Terraform
@@ -245,12 +262,14 @@ func buildFixedPriceCreate(p PriceModel) components.ProductPriceFixedCreate {
 	return components.ProductPriceFixedCreate{
 		PriceAmount:   p.PriceAmount.ValueInt64(),
 		PriceCurrency: optionalCurrency(p),
+		TaxBehavior:   optionalTaxBehavior(p),
 	}
 }
 
 func buildCustomPriceCreate(p PriceModel) components.ProductPriceCustomCreate {
 	create := components.ProductPriceCustomCreate{
 		PriceCurrency: optionalCurrency(p),
+		TaxBehavior:   optionalTaxBehavior(p),
 	}
 	if !p.MinimumAmount.IsNull() {
 		v := p.MinimumAmount.ValueInt64()
@@ -272,6 +291,7 @@ func buildMeteredUnitPriceCreate(p PriceModel) components.ProductPriceMeteredUni
 		MeterID:       p.MeterID.ValueString(),
 		UnitAmount:    components.CreateUnitAmountStr(p.UnitAmount.ValueString()),
 		PriceCurrency: optionalCurrency(p),
+		TaxBehavior:   optionalTaxBehavior(p),
 	}
 	if !p.CapAmount.IsNull() {
 		v := p.CapAmount.ValueInt64()
@@ -295,6 +315,7 @@ func buildSeatBasedPriceCreate(p PriceModel) components.ProductPriceSeatBasedCre
 	}
 	return components.ProductPriceSeatBasedCreate{
 		PriceCurrency: optionalCurrency(p),
+		TaxBehavior:   optionalTaxBehavior(p),
 		SeatTiers:     components.ProductPriceSeatTiersInput{Tiers: tiers},
 	}
 }
@@ -307,7 +328,7 @@ func pricesToRecurringCreateSDK(prices []PriceModel) ([]components.ProductCreate
 		case "fixed":
 			result[i] = components.CreateProductCreateRecurringPricesFixed(buildFixedPriceCreate(p))
 		case "free":
-			result[i] = components.CreateProductCreateRecurringPricesFree(components.ProductPriceFreeCreate{})
+			result[i] = components.CreateProductCreateRecurringPricesFree(components.ProductPriceFreeCreate{TaxBehavior: optionalTaxBehavior(p)})
 		case "custom":
 			result[i] = components.CreateProductCreateRecurringPricesCustom(buildCustomPriceCreate(p))
 		case "metered_unit":
@@ -330,7 +351,7 @@ func pricesToOneTimeCreateSDK(prices []PriceModel) ([]components.ProductCreateOn
 		case "fixed":
 			result[i] = components.CreateProductCreateOneTimePricesFixed(buildFixedPriceCreate(p))
 		case "free":
-			result[i] = components.CreateProductCreateOneTimePricesFree(components.ProductPriceFreeCreate{})
+			result[i] = components.CreateProductCreateOneTimePricesFree(components.ProductPriceFreeCreate{TaxBehavior: optionalTaxBehavior(p)})
 		case "custom":
 			result[i] = components.CreateProductCreateOneTimePricesCustom(buildCustomPriceCreate(p))
 		case "metered_unit":
@@ -360,6 +381,9 @@ type existingPrice struct {
 func extractExistingPrices(apiPrices []components.Prices) []*existingPrice {
 	var result []*existingPrice
 	for _, p := range apiPrices {
+		if priceArchived(p.ProductPrice) {
+			continue
+		}
 		if p.ProductPrice == nil {
 			continue
 		}
@@ -388,6 +412,12 @@ func extractExistingPrices(apiPrices []components.Prices) []*existingPrice {
 // pricesMatch compares the user-specified fields of two price models.
 func pricesMatch(planned, existing PriceModel) bool {
 	if planned.AmountType.ValueString() != existing.AmountType.ValueString() {
+		return false
+	}
+	if !planned.TaxBehavior.IsNull() && !planned.TaxBehavior.IsUnknown() && !planned.TaxBehavior.Equal(existing.TaxBehavior) {
+		return false
+	}
+	if !planned.PriceCurrency.IsNull() && !planned.PriceCurrency.IsUnknown() && !planned.PriceCurrency.Equal(existing.PriceCurrency) {
 		return false
 	}
 	switch planned.AmountType.ValueString() {
@@ -477,7 +507,7 @@ func pricesToUpdateSDK(planned []PriceModel, currentPrices []components.Prices) 
 			)
 		case "free":
 			result[i] = components.CreateProductUpdatePricesTwo(
-				components.CreateTwoFree(components.ProductPriceFreeCreate{}),
+				components.CreateTwoFree(components.ProductPriceFreeCreate{TaxBehavior: optionalTaxBehavior(p)}),
 			)
 		case "custom":
 			result[i] = components.CreateProductUpdatePricesTwo(
@@ -537,14 +567,17 @@ func benefitID(b components.Benefit) string {
 func sdkPricesToModel(prices []components.Prices, diags *diag.Diagnostics) []PriceModel {
 	result := make([]PriceModel, 0, len(prices))
 	for _, p := range prices {
+		if priceArchived(p.ProductPrice) {
+			continue
+		}
 		if p.ProductPrice != nil {
 			model := sdkProductPriceToModel(p.ProductPrice)
 			if model != nil {
 				result = append(result, *model)
 			} else {
-				diags.AddWarning(
+				diags.AddError(
 					"Unknown price type",
-					"The API returned a price type not recognized by this provider version. The price was omitted from state.",
+					"The API returned an unsupported active price. Refusing to omit it from state, which could archive it on update.",
 				)
 			}
 		}
@@ -558,6 +591,7 @@ func nullPriceModel(amountType string, currency types.String) PriceModel {
 	return PriceModel{
 		AmountType:    types.StringValue(amountType),
 		PriceCurrency: currency,
+		TaxBehavior:   types.StringNull(),
 		PriceAmount:   types.Int64Null(),
 		MinimumAmount: types.Int64Null(),
 		MaximumAmount: types.Int64Null(),
@@ -576,16 +610,19 @@ func sdkProductPriceToModel(price *components.ProductPrice) *PriceModel {
 		pp := price.ProductPriceFixed
 		m := nullPriceModel("fixed", types.StringValue(pp.PriceCurrency))
 		m.PriceAmount = types.Int64Value(pp.PriceAmount)
+		m.TaxBehavior = taxBehaviorValue(pp.TaxBehavior)
 		return &m
 
 	case price.ProductPriceFree != nil:
 		m := nullPriceModel("free", types.StringNull())
+		m.TaxBehavior = taxBehaviorValue(price.ProductPriceFree.TaxBehavior)
 		return &m
 
 	case price.ProductPriceCustom != nil:
 		pp := price.ProductPriceCustom
 		m := nullPriceModel("custom", types.StringValue(pp.PriceCurrency))
 		m.MinimumAmount = types.Int64Value(pp.MinimumAmount)
+		m.TaxBehavior = taxBehaviorValue(pp.TaxBehavior)
 		m.MaximumAmount = optionalInt64Value(pp.MaximumAmount)
 		m.PresetAmount = optionalInt64Value(pp.PresetAmount)
 		return &m
@@ -594,6 +631,7 @@ func sdkProductPriceToModel(price *components.ProductPrice) *PriceModel {
 		pp := price.ProductPriceMeteredUnit
 		m := nullPriceModel("metered_unit", types.StringValue(pp.PriceCurrency))
 		m.MeterID = types.StringValue(pp.MeterID)
+		m.TaxBehavior = taxBehaviorValue(pp.TaxBehavior)
 		m.UnitAmount = types.StringValue(normalizeDecimalString(pp.UnitAmount))
 		m.CapAmount = optionalInt64Value(pp.CapAmount)
 		return &m
@@ -601,6 +639,7 @@ func sdkProductPriceToModel(price *components.ProductPrice) *PriceModel {
 	case price.ProductPriceSeatBased != nil:
 		pp := price.ProductPriceSeatBased
 		m := nullPriceModel("seat_based", types.StringValue(pp.PriceCurrency))
+		m.TaxBehavior = taxBehaviorValue(pp.TaxBehavior)
 		tiers := make([]SeatTierModel, len(pp.SeatTiers.Tiers))
 		for i, t := range pp.SeatTiers.Tiers {
 			tiers[i] = SeatTierModel{
@@ -663,4 +702,38 @@ func preserveUnitAmountFormatting(prices []PriceModel, priorPrices []PriceModel)
 			}
 		}
 	}
+}
+
+func optionalTaxBehavior(p PriceModel) *components.TaxBehaviorOption {
+	if p.TaxBehavior.IsNull() || p.TaxBehavior.IsUnknown() {
+		return nil
+	}
+	v := components.TaxBehaviorOption(p.TaxBehavior.ValueString())
+	return &v
+}
+
+func taxBehaviorValue(value *components.TaxBehaviorOption) types.String {
+	if value == nil {
+		return types.StringNull()
+	}
+	return types.StringValue(string(*value))
+}
+
+func priceArchived(price *components.ProductPrice) bool {
+	if price == nil {
+		return false
+	}
+	switch {
+	case price.ProductPriceFixed != nil:
+		return price.ProductPriceFixed.IsArchived
+	case price.ProductPriceFree != nil:
+		return price.ProductPriceFree.IsArchived
+	case price.ProductPriceCustom != nil:
+		return price.ProductPriceCustom.IsArchived
+	case price.ProductPriceMeteredUnit != nil:
+		return price.ProductPriceMeteredUnit.IsArchived
+	case price.ProductPriceSeatBased != nil:
+		return price.ProductPriceSeatBased.IsArchived
+	}
+	return false
 }

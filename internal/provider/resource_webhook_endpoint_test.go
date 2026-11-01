@@ -11,6 +11,8 @@ import (
 	"reflect"
 	"regexp"
 	"sort"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	fwresource "github.com/hashicorp/terraform-plugin-framework/resource"
@@ -19,7 +21,9 @@ import (
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/knownvalue"
+	"github.com/hashicorp/terraform-plugin-testing/plancheck"
 	"github.com/hashicorp/terraform-plugin-testing/statecheck"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/hashicorp/terraform-plugin-testing/tfjsonpath"
 )
 
@@ -59,7 +63,10 @@ func TestWebhookEndpointRead_preservesKnownAndFutureEvents(t *testing.T) {
 	defer server.Close()
 
 	ctx := context.Background()
-	r := NewWebhookEndpointResource().(*WebhookEndpointResource)
+	r, ok := NewWebhookEndpointResource().(*WebhookEndpointResource)
+	if !ok {
+		t.Fatal("unexpected webhook resource type")
+	}
 	r.webhooks = &webhookEndpointHTTP{baseURL: server.URL, token: "test-token", client: server.Client()}
 	var schemaResp fwresource.SchemaResponse
 	r.Schema(ctx, fwresource.SchemaRequest{}, &schemaResp)
@@ -121,6 +128,111 @@ func TestWebhookEndpointRead_preservesKnownAndFutureEvents(t *testing.T) {
 	sort.Strings(actual)
 	if !reflect.DeepEqual(actual, expected) {
 		t.Fatalf("updated state dropped events: got %q, want %q", actual, expected)
+	}
+}
+
+func TestWebhookEndpointResource_importRefreshPreservesUnknownEvents(t *testing.T) {
+	const endpointID = "33333333-3333-4333-8333-333333333333"
+	const body = `{"id":"33333333-3333-4333-8333-333333333333","url":"https://example.com/webhook","format":"raw","secret":"fake-webhook-secret","enabled":true,"created_at":"2026-10-13T00:00:00Z","modified_at":null,"organization_id":"22222222-2222-4222-8222-222222222222","events":["order.created","subscription.cycled","subscription.future_event"]}`
+	var reads, deletes, forbidden atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path != "/v1/webhooks/endpoints/"+endpointID || req.Header.Get("Authorization") != "Bearer fake-token" {
+			forbidden.Add(1)
+			t.Errorf("unexpected webhook request: %s %s", req.Method, req.URL.Path)
+			http.Error(w, "unexpected request", http.StatusBadRequest)
+			return
+		}
+		switch req.Method {
+		case http.MethodGet:
+			reads.Add(1)
+			if deletes.Load() != 0 {
+				http.NotFound(w, req)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, body)
+		case http.MethodDelete:
+			// The acceptance harness destroys the fixture after all steps.
+			deletes.Add(1)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			forbidden.Add(1)
+			t.Errorf("adoption must not issue %s", req.Method)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+	defer server.Close()
+
+	const config = `
+provider "polar" {
+  access_token = "fake-token"
+  server       = "sandbox"
+}
+resource "polar_webhook_endpoint" "adopted" {
+  url     = "https://example.com/webhook"
+  format  = "raw"
+  enabled = true
+  events  = ["order.created", "subscription.cycled", "subscription.future_event"]
+}
+`
+	readOnly := func() error {
+		if forbidden.Load() != 0 || deletes.Load() != 0 {
+			return fmt.Errorf("import/refresh mutated fixture: forbidden=%d deletes=%d", forbidden.Load(), deletes.Load())
+		}
+		return nil
+	}
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: fakePolarProviderFactories(server),
+		Steps: []resource.TestStep{
+			{
+				Config:             config,
+				ResourceName:       "polar_webhook_endpoint.adopted",
+				ImportState:        true,
+				ImportStateId:      endpointID,
+				ImportStatePersist: true,
+				ImportStateCheck: func(states []*terraform.InstanceState) error {
+					if len(states) != 1 || states[0].ID != endpointID {
+						return fmt.Errorf("expected only imported endpoint %s, got %#v", endpointID, states)
+					}
+					events := make(map[string]bool)
+					for key, value := range states[0].Attributes {
+						if strings.HasPrefix(key, "events.") && key != "events.#" {
+							events[value] = true
+						}
+					}
+					if len(events) != 3 || !events["order.created"] || !events["subscription.cycled"] || !events["subscription.future_event"] {
+						return fmt.Errorf("import changed webhook events: %#v", events)
+					}
+					return readOnly()
+				},
+			},
+			{
+				RefreshState: true,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("polar_webhook_endpoint.adopted", "id", endpointID),
+					resource.TestCheckResourceAttr("polar_webhook_endpoint.adopted", "url", "https://example.com/webhook"),
+					resource.TestCheckResourceAttr("polar_webhook_endpoint.adopted", "format", "raw"),
+					resource.TestCheckResourceAttr("polar_webhook_endpoint.adopted", "enabled", "true"),
+					resource.TestCheckResourceAttr("polar_webhook_endpoint.adopted", "secret", "fake-webhook-secret"),
+					resource.TestCheckResourceAttr("polar_webhook_endpoint.adopted", "events.#", "3"),
+					resource.TestCheckTypeSetElemAttr("polar_webhook_endpoint.adopted", "events.*", "order.created"),
+					resource.TestCheckTypeSetElemAttr("polar_webhook_endpoint.adopted", "events.*", "subscription.cycled"),
+					resource.TestCheckTypeSetElemAttr("polar_webhook_endpoint.adopted", "events.*", "subscription.future_event"),
+					func(_ *terraform.State) error { return readOnly() },
+				),
+			},
+			{
+				Config:   config,
+				PlanOnly: true,
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PostApplyPreRefresh:  []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+					PostApplyPostRefresh: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+				},
+			},
+		},
+	})
+	if reads.Load() < 2 || forbidden.Load() != 0 || deletes.Load() != 1 {
+		t.Errorf("expected import/refresh GETs and one cleanup DELETE only: reads=%d forbidden=%d deletes=%d", reads.Load(), forbidden.Load(), deletes.Load())
 	}
 }
 

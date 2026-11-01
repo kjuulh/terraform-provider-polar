@@ -1,3 +1,29 @@
+## 0.2.5 (Unreleased)
+
+ENHANCEMENTS:
+
+- **resource/polar_product:** Add `metadata_json` for typed scalar metadata
+  without converting integers to strings or losing int64 precision. It is
+  mutually exclusive with the existing `metadata` string map. Imports populate
+  `metadata_json`; use that attribute when adopting products with numeric metadata.
+- **resource/polar_product:** Add `prices.tax_behavior` and
+  `recurring_interval_count`. Unchanged active prices retain their IDs on product
+  updates, including visibility changes. Archived prices are excluded from state
+  and are never reused.
+- **resource/polar_discount:** Add `max_redemptions_per_customer` for create,
+  update, refresh, and import. Removing the attribute clears the per-customer
+  limit. Unrestricted product scope remains unchanged.
+
+VERIFICATION:
+
+- Offline Terraform acceptance scenarios adopt existing products and nested
+  prices, meters, discounts, and webhook endpoints through fake HTTP servers,
+  including typed metadata, caps, explicit tax behavior, and future webhook events.
+- CI adds an offline acceptance job without Polar credentials, alongside the
+  unchanged secret-gated sandbox acceptance job. The sandbox suite remains
+  serialized and runs when its secret is available. No live compatibility or
+  catalog migration is claimed by the fake-server suite.
+
 ## 0.2.3 (2026-10-13)
 
 BUG FIXES:
